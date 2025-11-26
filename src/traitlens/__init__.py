@@ -13,7 +13,12 @@ from .compute import (
     compute_second_derivative,
     projection,
     cosine_similarity,
-    normalize_vectors
+    normalize_vectors,
+    magnitude,
+    radial_velocity,
+    angular_velocity,
+    pca_reduce,
+    attention_entropy,
 )
 from .methods import (
     ExtractionMethod,
@@ -47,7 +52,7 @@ from .metrics import (
     evaluate_vector_properties,
 )
 
-__version__ = "0.3.0"  # Bumped for new metrics module
+__version__ = "0.4.0"  # Bumped for new compute primitives
 
 __all__ = [
     # Core classes
@@ -61,6 +66,11 @@ __all__ = [
     "projection",
     "cosine_similarity",
     "normalize_vectors",
+    "magnitude",
+    "radial_velocity",
+    "angular_velocity",
+    "pca_reduce",
+    "attention_entropy",
 
     # Extraction methods
     "ExtractionMethod",

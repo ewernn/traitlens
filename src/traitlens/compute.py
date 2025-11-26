@@ -244,3 +244,171 @@ def magnitude(
         torch.Size([26, 50])  # Magnitude at each layer×token
     """
     return vectors.norm(dim=dim)
+
+
+def radial_velocity(
+    trajectory: torch.Tensor,
+    dim: int = 0
+) -> torch.Tensor:
+    """
+    Compute radial velocity (magnitude change) between consecutive points.
+
+    Radial velocity measures how much the activation magnitude changes,
+    independent of direction. Positive = growing, negative = shrinking.
+
+    Args:
+        trajectory: Activation trajectory [n_points, ..., hidden_dim]
+        dim: Dimension along which to compute velocity (default: 0)
+
+    Returns:
+        Radial velocity with shape [n_points-1, ...]
+
+    Example:
+        >>> hidden_states = torch.randn(26, 50, 2304)  # [layers, tokens, hidden]
+        >>> radial_vel = radial_velocity(hidden_states)
+        >>> radial_vel.shape
+        torch.Size([25, 50])  # Magnitude change per layer transition
+    """
+    mags = magnitude(trajectory, dim=-1)
+    return torch.diff(mags, dim=dim)
+
+
+def angular_velocity(
+    trajectory: torch.Tensor,
+    dim: int = 0
+) -> torch.Tensor:
+    """
+    Compute angular velocity (direction change) between consecutive points.
+
+    Angular velocity measures how much the activation direction changes,
+    independent of magnitude. 0 = same direction, 2 = opposite direction.
+
+    Args:
+        trajectory: Activation trajectory [n_points, ..., hidden_dim]
+        dim: Dimension along which to compute velocity (default: 0)
+
+    Returns:
+        Angular velocity (1 - cosine_similarity) with shape [n_points-1, ...]
+
+    Example:
+        >>> hidden_states = torch.randn(26, 50, 2304)  # [layers, tokens, hidden]
+        >>> angular_vel = angular_velocity(hidden_states)
+        >>> angular_vel.shape
+        torch.Size([25, 50])  # Direction change per layer transition
+    """
+    # Normalize to unit vectors
+    normed = normalize_vectors(trajectory, dim=-1)
+
+    # Get consecutive pairs
+    if dim == 0:
+        v1 = normed[:-1]
+        v2 = normed[1:]
+    else:
+        v1 = torch.narrow(normed, dim, 0, normed.shape[dim] - 1)
+        v2 = torch.narrow(normed, dim, 1, normed.shape[dim] - 1)
+
+    # Cosine similarity between consecutive vectors
+    cos_sim = (v1 * v2).sum(dim=-1)
+
+    # Angular velocity = 1 - cos_sim (0 = same direction, 2 = opposite)
+    return 1.0 - cos_sim
+
+
+def pca_reduce(
+    activations: torch.Tensor,
+    n_components: int = 2,
+    return_pca: bool = False
+) -> Union[torch.Tensor, Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]]:
+    """
+    Reduce activations to lower dimensions using PCA.
+
+    Args:
+        activations: Activations to reduce [..., hidden_dim]
+        n_components: Number of dimensions to reduce to (default: 2)
+        return_pca: If True, also return (mean, components) for reuse
+
+    Returns:
+        Reduced activations [..., n_components]
+        If return_pca=True: (reduced, (mean, components))
+
+    Example:
+        >>> hidden_states = torch.randn(26, 50, 2304)  # [layers, tokens, hidden]
+        >>> reduced = pca_reduce(hidden_states, n_components=2)
+        >>> reduced.shape
+        torch.Size([26, 50, 2])  # 2D trajectory per token
+
+        >>> # Reuse PCA for new data
+        >>> reduced, (mean, components) = pca_reduce(train_data, return_pca=True)
+        >>> new_reduced = (new_data - mean) @ components.T
+    """
+    original_shape = activations.shape
+    hidden_dim = original_shape[-1]
+
+    # Flatten to [n_samples, hidden_dim]
+    flat = activations.reshape(-1, hidden_dim).float()
+
+    # Center the data
+    mean = flat.mean(dim=0)
+    centered = flat - mean
+
+    # Compute covariance matrix
+    cov = (centered.T @ centered) / (centered.shape[0] - 1)
+
+    # Eigendecomposition (use eigh for symmetric matrix)
+    eigenvalues, eigenvectors = torch.linalg.eigh(cov)
+
+    # Sort by eigenvalue (descending) and take top n_components
+    idx = torch.argsort(eigenvalues, descending=True)[:n_components]
+    components = eigenvectors[:, idx]  # [hidden_dim, n_components]
+
+    # Project
+    reduced_flat = centered @ components  # [n_samples, n_components]
+
+    # Reshape back
+    new_shape = original_shape[:-1] + (n_components,)
+    reduced = reduced_flat.reshape(new_shape)
+
+    if return_pca:
+        return reduced, (mean, components)
+    return reduced
+
+
+def attention_entropy(
+    attention_weights: torch.Tensor,
+    dim: int = -1
+) -> torch.Tensor:
+    """
+    Compute entropy of attention distribution.
+
+    Higher entropy = more diffuse attention (looking at many tokens).
+    Lower entropy = more focused attention (looking at few tokens).
+
+    Args:
+        attention_weights: Attention weights [..., n_tokens] (should sum to 1)
+        dim: Dimension along which to compute entropy (default: -1)
+
+    Returns:
+        Entropy values with `dim` removed
+
+    Example:
+        >>> attn = torch.softmax(torch.randn(8, 50, 50), dim=-1)  # [heads, query, key]
+        >>> entropy = attention_entropy(attn)
+        >>> entropy.shape
+        torch.Size([8, 50])  # Entropy per head per query position
+
+        >>> # Focused attention (low entropy)
+        >>> focused = torch.zeros(10); focused[0] = 1.0
+        >>> attention_entropy(focused)
+        tensor(0.)
+
+        >>> # Diffuse attention (high entropy)
+        >>> diffuse = torch.ones(10) / 10
+        >>> attention_entropy(diffuse)
+        tensor(2.3026)  # ln(10)
+    """
+    # Add small epsilon to avoid log(0)
+    eps = 1e-10
+    weights = attention_weights.clamp(min=eps)
+
+    # Entropy = -sum(p * log(p))
+    return -(weights * weights.log()).sum(dim=dim)

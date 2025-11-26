@@ -1,4 +1,4 @@
-# traitlens v0.3
+# traitlens v0.4
 
 A minimal toolkit for extracting and analyzing trait vectors from transformer language models.
 
@@ -139,6 +139,11 @@ Stores activations during forward passes. Use `make_hook()` to create hook funct
 - `projection()` - Project activations onto trait vectors
 - `cosine_similarity()` - Compare vectors
 - `normalize_vectors()` - Normalize to unit length
+- `magnitude()` - Compute L2 norm of vectors
+- `radial_velocity()` - Magnitude change between consecutive points
+- `angular_velocity()` - Direction change between consecutive points
+- `pca_reduce()` - Reduce activations to N dimensions via PCA
+- `attention_entropy()` - Compute entropy of attention distribution
 
 ## Philosophy
 

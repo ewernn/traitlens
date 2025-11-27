@@ -98,7 +98,7 @@ class ICAMethod(ExtractionMethod):
         self,
         pos_acts: torch.Tensor,
         neg_acts: torch.Tensor,
-        n_components: int = 10,
+        n_components: int = 50,
         component_idx: int = 0,
         **kwargs
     ) -> Dict[str, torch.Tensor]:
@@ -176,6 +176,7 @@ class ProbeMethod(ExtractionMethod):
         neg_acts: torch.Tensor,
         max_iter: int = 1000,
         C: float = 1.0,
+        penalty: str = 'l2',
         **kwargs
     ) -> Dict[str, torch.Tensor]:
         """
@@ -186,6 +187,8 @@ class ProbeMethod(ExtractionMethod):
             neg_acts: [n_neg, hidden_dim]
             max_iter: Maximum iterations for solver
             C: Regularization strength (smaller = stronger regularization)
+            penalty: Regularization type ('l1', 'l2', or 'elasticnet')
+                     Use 'l1' for sparse probe (interpretable, shows which dims matter)
 
         Returns:
             {
@@ -211,10 +214,15 @@ class ProbeMethod(ExtractionMethod):
             np.zeros(neg_acts.shape[0])
         ])
 
+        # Select solver based on penalty (l1 requires liblinear or saga)
+        solver = 'saga' if penalty in ('l1', 'elasticnet') else 'lbfgs'
+
         # Train probe
         probe = LogisticRegression(
             max_iter=max_iter,
             C=C,
+            penalty=penalty,
+            solver=solver,
             random_state=42,
             **kwargs
         )
@@ -332,13 +340,98 @@ class GradientMethod(ExtractionMethod):
         }
 
 
+class PCADiffMethod(ExtractionMethod):
+    """
+    PCA on per-example difference vectors (RepE-style).
+
+    Pairs positive and negative examples, computes differences,
+    then returns the first principal component of those differences.
+
+    Unlike mean_diff which just computes centroids, this captures
+    the variance structure across example pairs.
+    """
+
+    def extract(
+        self,
+        pos_acts: torch.Tensor,
+        neg_acts: torch.Tensor,
+        **kwargs
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Extract vector via PCA on differences.
+
+        Args:
+            pos_acts: [n_pos, hidden_dim]
+            neg_acts: [n_neg, hidden_dim]
+
+        Returns:
+            {'vector': First PC of difference vectors}
+        """
+        # Pair up examples (use min of both)
+        n = min(len(pos_acts), len(neg_acts))
+        diffs = pos_acts[:n].float() - neg_acts[:n].float()  # [n, hidden_dim]
+
+        # PCA: first principal component of differences
+        U, S, Vt = torch.pca_lowrank(diffs, q=1)
+        vector = Vt[0]  # [hidden_dim]
+
+        # Normalize
+        vector = vector / (vector.norm() + 1e-8)
+
+        return {
+            'vector': vector,
+            'explained_variance': S[0].item() if len(S) > 0 else 0.0,
+            'n_pairs': n
+        }
+
+
+class RandomBaselineMethod(ExtractionMethod):
+    """
+    Random unit vector baseline.
+
+    Returns a random direction for sanity checking. Should achieve
+    ~50% accuracy. If it scores higher, your evaluation is broken.
+    """
+
+    def extract(
+        self,
+        pos_acts: torch.Tensor,
+        neg_acts: torch.Tensor,
+        seed: int = None,
+        **kwargs
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Generate random unit vector.
+
+        Args:
+            pos_acts: [n_pos, hidden_dim] (only used for shape)
+            neg_acts: [n_neg, hidden_dim] (unused)
+            seed: Optional random seed for reproducibility
+
+        Returns:
+            {'vector': Random unit vector}
+        """
+        hidden_dim = pos_acts.shape[1]
+
+        if seed is not None:
+            torch.manual_seed(seed)
+
+        vector = torch.randn(hidden_dim, dtype=pos_acts.dtype, device=pos_acts.device)
+        vector = vector / (vector.norm() + 1e-8)
+
+        return {
+            'vector': vector,
+            'is_random': True
+        }
+
+
 # Convenience function for easy access
 def get_method(name: str) -> ExtractionMethod:
     """
     Get extraction method by name.
 
     Args:
-        name: One of 'mean_diff', 'ica', 'probe', 'gradient'
+        name: One of 'mean_diff', 'ica', 'probe', 'gradient', 'pca_diff', 'random_baseline'
 
     Returns:
         Instance of the requested method
@@ -351,7 +444,9 @@ def get_method(name: str) -> ExtractionMethod:
         'mean_diff': MeanDifferenceMethod,
         'ica': ICAMethod,
         'probe': ProbeMethod,
-        'gradient': GradientMethod
+        'gradient': GradientMethod,
+        'pca_diff': PCADiffMethod,
+        'random_baseline': RandomBaselineMethod,
     }
 
     if name not in methods:

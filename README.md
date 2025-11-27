@@ -31,21 +31,22 @@ from traitlens import HookManager, ActivationCapture, mean_difference
 from traitlens import HookManager, ActivationCapture
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# Load your model
-model = AutoModelForCausalLM.from_pretrained("google/gemma-2-2b-it")
-tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
+# Load your model (any HuggingFace model works)
+model = AutoModelForCausalLM.from_pretrained("your-model")
+tokenizer = AutoTokenizer.from_pretrained("your-model")
 
-# Capture activations
+# Capture activations from any layer
 capture = ActivationCapture()
 with HookManager(model) as hooks:
-    hooks.add_forward_hook("model.layers.16", capture.make_hook("layer_16"))
+    # Hook path depends on model architecture (e.g., "model.layers.N" for Llama/Gemma)
+    hooks.add_forward_hook("model.layers.12", capture.make_hook("layer_12"))
 
     # Run forward pass
     inputs = tokenizer("Hello world", return_tensors="pt")
     outputs = model.generate(**inputs, max_new_tokens=10)
 
 # Get captured activations
-activations = capture.get("layer_16")  # [batch, seq_len, hidden_dim]
+activations = capture.get("layer_12")  # [batch, seq_len, hidden_dim]
 ```
 
 ### Extract Trait Vectors
@@ -70,8 +71,12 @@ result = method.extract(pos_acts, neg_acts)
 trait_vector = result['vector']
 train_acc = result['train_acc']
 
+# Method 2b: Sparse probe (L1 regularization - shows which dims matter)
+result = method.extract(pos_acts, neg_acts, penalty='l1')
+sparse_vector = result['vector']  # Many near-zero components
+
 # Method 3: Factory function
-method = get_method('ica')  # or 'probe', 'gradient', 'mean_diff'
+method = get_method('ica')  # or 'probe', 'gradient', 'mean_diff', 'pca_diff', 'random_baseline'
 result = method.extract(pos_acts, neg_acts)
 ```
 
@@ -97,10 +102,11 @@ commitment = (acceleration.norm(dim=-1) < threshold).nonzero()[0]
 
 ```python
 # Compare trait across different model components
+# (paths vary by architecture - these are for Llama/Gemma style)
 locations = {
-    'residual': 'model.layers.16',
-    'attention': 'model.layers.16.self_attn.o_proj',
-    'mlp': 'model.layers.16.mlp.down_proj',
+    'residual': 'model.layers.12',
+    'attention': 'model.layers.12.self_attn.o_proj',
+    'mlp': 'model.layers.12.mlp.down_proj',
 }
 
 capture = ActivationCapture()
@@ -128,8 +134,10 @@ Stores activations during forward passes. Use `make_hook()` to create hook funct
 ### Extraction Methods
 - `MeanDifferenceMethod` - Simple mean difference (baseline)
 - `ICAMethod` - Independent component analysis (requires scikit-learn)
-- `ProbeMethod` - Linear probe via logistic regression (requires scikit-learn)
+- `ProbeMethod` - Linear probe via logistic regression (supports L1/L2 via `penalty` param)
 - `GradientMethod` - Gradient-based optimization
+- `PCADiffMethod` - PCA on per-example differences (RepE-style)
+- `RandomBaselineMethod` - Random unit vector (sanity check, should get ~50% accuracy)
 - `get_method(name)` - Factory function for any method
 
 ### Compute Functions
@@ -160,18 +168,10 @@ We do NOT provide:
 
 Like numpy gives you arrays (not statistical tests), traitlens gives you activations (not interpretability methods). Build your own analysis on top.
 
-## Examples
-
-See `examples/example_minimal.py` for a complete working example that:
-1. Captures activations from Gemma-2B
-2. Extracts trait vectors
-3. Analyzes temporal dynamics
-4. Compares multiple locations
-
 ## Requirements
 
 - PyTorch
-- transformers (for examples only, not core functionality)
+- transformers (for loading models, not core functionality)
 - scikit-learn (optional, for ICA and Probe methods)
 
 ## License

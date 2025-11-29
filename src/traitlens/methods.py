@@ -372,8 +372,9 @@ class PCADiffMethod(ExtractionMethod):
         diffs = pos_acts[:n].float() - neg_acts[:n].float()  # [n, hidden_dim]
 
         # PCA: first principal component of differences
+        # pca_lowrank returns Vt with shape [hidden_dim, q], so use [:, 0]
         U, S, Vt = torch.pca_lowrank(diffs, q=1)
-        vector = Vt[0]  # [hidden_dim]
+        vector = Vt[:, 0]  # [hidden_dim]
 
         # Normalize
         vector = vector / (vector.norm() + 1e-8)
